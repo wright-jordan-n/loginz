@@ -9,11 +9,47 @@ For subsequent requests that require login authorization, `func (authz *SessionM
 
 In order to revoke authorization (aka logout), `func (authz *SessionManager) Disable(all bool, r *http.Request, w http.ResponseWriter) (bool, error)` is called. Where the `all` argument indicates whether to logout all user sessions or only the current session only.
 
-### Philosophy
+## API
+
+### NewAuthZManager
+```
+func NewAuthZManager(
+	keys []string,
+	db *sql.DB,
+	sessionTimeout int64,
+	idleTimeout int64,
+	tokenTimeout int64,
+) *sessionManager {
+	return &sessionManager{keys, db, sessionTimeout, idleTimeout, tokenTimeout}
+}
+```
+`keys` - Array of session keys. The newest key should be at the front of the array, and keys should get progressively older as the index increases.
+
+`db` - The standard libary's *sql.DB. Currently only SQLite3 should be used.
+
+`sessionTimeout` - The maximum amount of seconds that an authorization session remains valid, regardless of activity.
+
+`idleTimeout` - The amount of seconds the an authorization session will remain valid without a request for a new access token.
+
+`tokenTimeout`- The amount of seconds that an access token remains valid.
+
+### AuthZManager.Enable
+```
+func (authz *sessionManager) Enable(uid string, w http.ResponseWriter) error
+```
+Enables authorization for a provided user id.
+
+`uid` - A user id obtained as a result of the application's login authentication process.
+
+If the returning `err` is not `nil`, then the authorization request was not completed.
+
+### AuthZManager.UserID
+
+## Philosophy
 
 This library uses hybrid approach to session management. It combines the use of stateless access tokens with stateful session objects. The goal is to balance security and performance concerns.
 
-### Automatic Session ID Renewal
+## Automatic Session ID Renewal
 
 This mechanism mirrors that of OAuth's Refresh Token Rotation. The session id may be thought of as a refresh token. Whenever a new access token is requested, the session id is used to generate it. The session object is then marked as obsolete, and is superseded by an associated session object with a new id. Session objects are associated by their initial authorization grant, so that if an obsolete session id used, then all session ids associated with the same grant are invalidated.
 

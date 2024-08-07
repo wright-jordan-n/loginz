@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-type Session struct {
+type session struct {
 	id           string
 	userID       string
 	groupID      string
@@ -22,7 +22,7 @@ type Session struct {
 	obsolete     bool
 }
 
-type SessionManager struct {
+type sessionManager struct {
 	keys           []string
 	db             *sql.DB
 	sessionTimeout int64
@@ -36,8 +36,8 @@ func NewAuthZManager(
 	sessionTimeout int64,
 	idleTimeout int64,
 	tokenTimeout int64,
-) *SessionManager {
-	return &SessionManager{keys, db, sessionTimeout, idleTimeout, tokenTimeout}
+) *sessionManager {
+	return &sessionManager{keys, db, sessionTimeout, idleTimeout, tokenTimeout}
 }
 
 var (
@@ -70,7 +70,7 @@ var (
 	}
 )
 
-func (authz *SessionManager) Enable(uid string, w http.ResponseWriter) error {
+func (authz *sessionManager) Enable(uid string, w http.ResponseWriter) error {
 	sessID := make([]byte, 16)
 	_, err := rand.Read(sessID)
 	if err != nil {
@@ -82,7 +82,7 @@ func (authz *SessionManager) Enable(uid string, w http.ResponseWriter) error {
 		return errors.Join(ErrCryptoService, err)
 	}
 	now := time.Now().Unix()
-	sess := Session{
+	sess := session{
 		hex.EncodeToString(sessID),
 		uid,
 		hex.EncodeToString(groupID),
@@ -116,7 +116,7 @@ func (authz *SessionManager) Enable(uid string, w http.ResponseWriter) error {
 	return nil
 }
 
-func (authz *SessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
+func (authz *sessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
 	var uid string
 	var ok bool
 	var err1 error
@@ -128,7 +128,7 @@ func (authz *SessionManager) UserID(r *http.Request, w http.ResponseWriter) (str
 	return uid, ok, errors.Join(err1, err2)
 }
 
-func (authz *SessionManager) Disable(all bool, r *http.Request, w http.ResponseWriter) (bool, error) {
+func (authz *sessionManager) Disable(all bool, r *http.Request, w http.ResponseWriter) (bool, error) {
 	cookie, err := r.Cookie("__Host-sid")
 	if err != nil {
 		http.SetCookie(w, dropTokCookie)
@@ -156,7 +156,7 @@ func (authz *SessionManager) Disable(all bool, r *http.Request, w http.ResponseW
 		http.SetCookie(w, dropSIDCookie)
 		return false, ErrSIDCookieSignature
 	}
-	sess := Session{id: id}
+	sess := session{id: id}
 	err = authz.db.QueryRow(`
 	SELECT
 		user_id,
@@ -228,7 +228,7 @@ func (authz *SessionManager) Disable(all bool, r *http.Request, w http.ResponseW
 	}
 }
 
-func (authz *SessionManager) setTokCookie(uid string, w http.ResponseWriter) {
+func (authz *sessionManager) setTokCookie(uid string, w http.ResponseWriter) {
 	tok := uid + "." + strconv.FormatInt(time.Now().Unix()+authz.tokenTimeout, 10)
 	hash := hmac.New(sha256.New, []byte(authz.keys[0]))
 	hash.Write([]byte(tok))
@@ -245,7 +245,7 @@ func (authz *SessionManager) setTokCookie(uid string, w http.ResponseWriter) {
 	http.SetCookie(w, cookie)
 }
 
-func (authz *SessionManager) setSIDCookie(sid string, w http.ResponseWriter) {
+func (authz *sessionManager) setSIDCookie(sid string, w http.ResponseWriter) {
 	hash := hmac.New(sha256.New, []byte(authz.keys[0]))
 	hash.Write([]byte(sid))
 	mac := hash.Sum(nil)
@@ -261,7 +261,7 @@ func (authz *SessionManager) setSIDCookie(sid string, w http.ResponseWriter) {
 	http.SetCookie(w, cookie)
 }
 
-func (authz *SessionManager) readTok(r *http.Request, w http.ResponseWriter) (string, bool, error) {
+func (authz *sessionManager) readTok(r *http.Request, w http.ResponseWriter) (string, bool, error) {
 	cookie, err := r.Cookie("__Host-tok")
 	if err != nil {
 		return "", false, nil
@@ -304,7 +304,7 @@ func (authz *SessionManager) readTok(r *http.Request, w http.ResponseWriter) (st
 	return uid, true, nil
 }
 
-func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
+func (authz *sessionManager) readSID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
 	cookie, err := r.Cookie("__Host-sid")
 	if err != nil {
 		return "", false, nil
@@ -329,7 +329,7 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, ErrSIDCookieSignature
 	}
-	sess := Session{id: id}
+	sess := session{id: id}
 	err = authz.db.QueryRow(`
 	SELECT
 		user_id,
@@ -363,7 +363,7 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		return "", false, ErrCredentialReuse
 	}
 	now := time.Now().Unix()
-	if  now > sess.expiresAt || now > sess.idleDeadline {
+	if now > sess.expiresAt || now > sess.idleDeadline {
 		_, err := authz.db.Exec("DELETE FROM session WHERE group_id = ?", sess.groupID)
 		if err != nil {
 			http.SetCookie(w, dropSIDCookie)
@@ -383,7 +383,7 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, errors.Join(ErrCryptoService, err)
 	}
-	newSess := Session{
+	newSess := session{
 		hex.EncodeToString(newID),
 		sess.userID,
 		sess.groupID,

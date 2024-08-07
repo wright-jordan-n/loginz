@@ -1,1 +1,1 @@
-# login-authz
+# loginz

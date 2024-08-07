@@ -1,4 +1,4 @@
-package authz
+package loginz
 
 import (
 	"crypto/hmac"

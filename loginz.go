@@ -14,29 +14,41 @@ import (
 )
 
 type Session struct {
-	id        string
-	userID    string
-	groupID   string
-	expiresAt int64
-	obsolete  bool
+	id           string
+	userID       string
+	groupID      string
+	expiresAt    int64
+	idleDeadline int64
+	obsolete     bool
 }
 
 type SessionManager struct {
 	keys           []string
 	db             *sql.DB
 	sessionTimeout int64
+	idleTimeout    int64
 	tokenTimeout   int64
 }
 
+func NewAuthZManager(
+	keys []string,
+	db *sql.DB,
+	sessionTimeout int64,
+	idleTimeout int64,
+	tokenTimeout int64,
+) *SessionManager {
+	return &SessionManager{keys, db, sessionTimeout, idleTimeout, tokenTimeout}
+}
+
 var (
-	ErrDBService          = errors.New("login-authz - database operation failed")
-	ErrCryptoService      = errors.New("login-authz - crypto operation failed")
-	ErrSIDCookieSyntax    = errors.New("login-authz - sid cookie syntax - possible tampering")
-	ErrSIDCookieSignature = errors.New("login-authz - sid cookie signature - possible tampering")
-	ErrTokCookieSyntax    = errors.New("login-authz - tok cookie syntax - possible tampering")
-	ErrTokCookieSignature = errors.New("login-authz - tok cookie signature - possible tampering")
-	ErrCredentialReuse    = errors.New("login-authz - possible session fixation")
-	ErrLeakedSecret       = errors.New("login-authz - possible leaked secret")
+	ErrDBService          = errors.New("loginz - database operation failed")
+	ErrCryptoService      = errors.New("loginz - crypto operation failed")
+	ErrSIDCookieSyntax    = errors.New("loginz - sid cookie syntax - possible tampering")
+	ErrSIDCookieSignature = errors.New("loginz - sid cookie signature - possible tampering")
+	ErrTokCookieSyntax    = errors.New("loginz - tok cookie syntax - possible tampering")
+	ErrTokCookieSignature = errors.New("loginz - tok cookie signature - possible tampering")
+	ErrCredentialReuse    = errors.New("loginz - possible session fixation")
+	ErrLeakedSecret       = errors.New("loginz - possible leaked secret")
 )
 
 var (
@@ -58,6 +70,52 @@ var (
 	}
 )
 
+func (authz *SessionManager) Enable(uid string, w http.ResponseWriter) error {
+	sessID := make([]byte, 16)
+	_, err := rand.Read(sessID)
+	if err != nil {
+		return errors.Join(ErrCryptoService, err)
+	}
+	groupID := make([]byte, 16)
+	_, err = rand.Read(sessID)
+	if err != nil {
+		return errors.Join(ErrCryptoService, err)
+	}
+	now := time.Now().Unix()
+	sess := Session{
+		hex.EncodeToString(sessID),
+		uid,
+		hex.EncodeToString(groupID),
+		now + authz.sessionTimeout,
+		now + authz.idleTimeout,
+		false,
+	}
+	_, err = authz.db.Exec(`
+	INSERT INTO session (
+		id,
+		user_id
+		group_id,
+		expires_at,
+		idle_deadline,
+		obsolete
+	) VALUES (
+		?,?,?,?,?
+	)`,
+		sess.id,
+		sess.userID,
+		sess.groupID,
+		sess.expiresAt,
+		sess.idleDeadline,
+		sess.obsolete,
+	)
+	if err != nil {
+		return errors.Join(ErrDBService, err)
+	}
+	authz.setTokCookie(sess.userID, w)
+	authz.setSIDCookie(sess.id, w)
+	return nil
+}
+
 func (authz *SessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
 	var uid string
 	var ok bool
@@ -68,6 +126,106 @@ func (authz *SessionManager) UserID(r *http.Request, w http.ResponseWriter) (str
 		uid, ok, err2 = authz.readSID(r, w)
 	}
 	return uid, ok, errors.Join(err1, err2)
+}
+
+func (authz *SessionManager) Disable(all bool, r *http.Request, w http.ResponseWriter) (bool, error) {
+	cookie, err := r.Cookie("__Host-sid")
+	if err != nil {
+		http.SetCookie(w, dropTokCookie)
+		return false, nil
+	}
+	mac, id, found := strings.Cut(cookie.Value, ".")
+	if !found {
+		http.SetCookie(w, dropTokCookie)
+		http.SetCookie(w, dropSIDCookie)
+		return false, ErrSIDCookieSyntax
+	}
+	var targetMAC []byte
+	var match bool
+	for i := 0; i < len(authz.keys); i++ {
+		hash := hmac.New(sha256.New, []byte(authz.keys[i]))
+		hash.Write([]byte(id))
+		targetMAC = hash.Sum(nil)
+		match = hmac.Equal([]byte(mac), targetMAC)
+		if match {
+			break
+		}
+	}
+	if !match {
+		http.SetCookie(w, dropTokCookie)
+		http.SetCookie(w, dropSIDCookie)
+		return false, ErrSIDCookieSignature
+	}
+	sess := Session{id: id}
+	err = authz.db.QueryRow(`
+	SELECT
+		user_id,
+		group_id,
+		expires_at,
+		idle_deadline,
+		obsolete
+	FROM
+		session WHERE id = ?`, sess.id).Scan(
+		&sess.userID,
+		&sess.groupID,
+		&sess.expiresAt,
+		&sess.idleDeadline,
+		&sess.obsolete,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.SetCookie(w, dropTokCookie)
+			http.SetCookie(w, dropSIDCookie)
+			return false, nil
+		}
+		http.SetCookie(w, dropTokCookie)
+		http.SetCookie(w, dropSIDCookie)
+		return false, errors.Join(ErrDBService, err)
+	}
+	if sess.obsolete {
+		_, err := authz.db.Exec("DELETE FROM session WHERE group_id = ?", sess.userID)
+		if err != nil {
+			http.SetCookie(w, dropTokCookie)
+			http.SetCookie(w, dropSIDCookie)
+			return false, errors.Join(ErrCredentialReuse, ErrDBService, err)
+		}
+		http.SetCookie(w, dropTokCookie)
+		http.SetCookie(w, dropSIDCookie)
+		return false, ErrCredentialReuse
+	}
+	now := time.Now().Unix()
+	if now > sess.expiresAt || now > sess.idleDeadline {
+		_, err := authz.db.Exec("DELETE FROM session WHERE group_id = ?", sess.groupID)
+		if err != nil {
+			http.SetCookie(w, dropTokCookie)
+			http.SetCookie(w, dropSIDCookie)
+			return false, errors.Join(ErrDBService, err)
+		}
+		http.SetCookie(w, dropTokCookie)
+		http.SetCookie(w, dropSIDCookie)
+		return false, nil
+	}
+	if all {
+		_, err := authz.db.Exec("DELETE FROM session WHERE user_id = ?", sess.userID)
+		if err != nil {
+			http.SetCookie(w, dropTokCookie)
+			http.SetCookie(w, dropSIDCookie)
+			return false, errors.Join(ErrDBService, err)
+		}
+		http.SetCookie(w, dropTokCookie)
+		http.SetCookie(w, dropSIDCookie)
+		return true, nil
+	} else {
+		_, err := authz.db.Exec("DELETE FROM session WHERE group_id = ?", sess.groupID)
+		if err != nil {
+			http.SetCookie(w, dropTokCookie)
+			http.SetCookie(w, dropSIDCookie)
+			return false, errors.Join(ErrDBService, err)
+		}
+		http.SetCookie(w, dropTokCookie)
+		http.SetCookie(w, dropSIDCookie)
+		return true, nil
+	}
 }
 
 func (authz *SessionManager) setTokCookie(uid string, w http.ResponseWriter) {
@@ -171,19 +329,20 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, ErrSIDCookieSignature
 	}
-	sess := Session{}
-	sess.id = id
+	sess := Session{id: id}
 	err = authz.db.QueryRow(`
 	SELECT
 		user_id,
 		group_id,
 		expires_at,
+		idle_deadline,
 		obsolete
 	FROM
-		session WHERE id = ?`, id).Scan(
+		session WHERE id = ?`, sess.id).Scan(
 		&sess.userID,
 		&sess.groupID,
 		&sess.expiresAt,
+		&sess.idleDeadline,
 		&sess.obsolete,
 	)
 	if err != nil {
@@ -195,7 +354,7 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		return "", false, errors.Join(ErrDBService, err)
 	}
 	if sess.obsolete {
-		_, err := authz.db.Exec("DELETE FROM session WHERE user_id = ?", sess.userID)
+		_, err := authz.db.Exec("DELETE FROM session WHERE group_id = ?", sess.userID)
 		if err != nil {
 			http.SetCookie(w, dropSIDCookie)
 			return "", false, errors.Join(ErrCredentialReuse, ErrDBService, err)
@@ -203,7 +362,8 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, ErrCredentialReuse
 	}
-	if time.Now().Unix() > sess.expiresAt {
+	now := time.Now().Unix()
+	if  now > sess.expiresAt || now > sess.idleDeadline {
 		_, err := authz.db.Exec("DELETE FROM session WHERE group_id = ?", sess.groupID)
 		if err != nil {
 			http.SetCookie(w, dropSIDCookie)
@@ -217,17 +377,18 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, errors.Join(ErrDBService, err)
 	}
-	newId := make([]byte, 16)
-	_, err = rand.Read(newId)
+	newID := make([]byte, 16)
+	_, err = rand.Read(newID)
 	if err != nil {
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, errors.Join(ErrCryptoService, err)
 	}
 	newSess := Session{
-		hex.EncodeToString(newId),
+		hex.EncodeToString(newID),
 		sess.userID,
 		sess.groupID,
 		sess.expiresAt,
+		now + authz.idleTimeout,
 		false,
 	}
 	_, err = authz.db.Exec(`
@@ -236,6 +397,7 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		user_id
 		group_id,
 		expires_at,
+		idle_deadline,
 		obsolete
 	) VALUES (
 		?,?,?,?,?
@@ -244,6 +406,7 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		newSess.userID,
 		newSess.groupID,
 		newSess.expiresAt,
+		newSess.idleDeadline,
 		newSess.obsolete,
 	)
 	if err != nil {
@@ -262,8 +425,12 @@ func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 // create session
 // set cookies
 //
-// If the db query fails, client cookies will still be removed.
+// If the db query fails, user-agent cookies will still be removed.
 // It is recommended to alert the user-agent if they intended to logout of all devices.
-// * Disable(all bool) (error)
+// * ok, err := Disable(all bool) (bool, error)
+// ok and err should be treated as independent
+// if !ok, the the client is not authorized to perform this action
+// if !ok and all, then the client should be informed that they were not authorized to logout of all devices
+// if err, then the application should inspect the errors as necessary
 // if all { delete by userID } else { delete by groupID }
 // remove cookies

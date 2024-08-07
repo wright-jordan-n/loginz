@@ -15,8 +15,8 @@ import (
 
 type Session struct {
 	id        string
-	userId    string
-	groupId   string
+	userID    string
+	groupID   string
 	expiresAt int64
 	obsolete  bool
 }
@@ -29,24 +29,46 @@ type SessionManager struct {
 }
 
 var (
-	ErrInternalService = errors.New("")
-	ErrSidCookieTamper = errors.New("")
-	ErrTokCookieTamper = errors.New("")
-	ErrCredentialReuse = errors.New("")
-	ErrNoActiveSession = errors.New("")
-	ErrNoActiveToken   = errors.New("")
-	ErrLeakedSecret    = errors.New("")
+	ErrInternalService    = errors.New("")
+	ErrSIDCookieTamper    = errors.New("")
+	ErrSIDCookieSignature = errors.New("")
+	ErrTokCookieTamper    = errors.New("")
+	ErrTokCookieSignature = errors.New("")
+	ErrCredentialReuse    = errors.New("")
+	ErrNoActiveSession    = errors.New("")
+	ErrNoActiveToken      = errors.New("")
+	ErrLeakedSecret       = errors.New("")
 )
 
-func (mgmt *SessionManager) User(r *http.Request, w http.ResponseWriter) (string, error) {
+var (
+	dropTokCookie = &http.Cookie{
+		Name:     "__Host-tok",
+		Path:     "/",
+		MaxAge:   -1,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+	dropSidCookie = &http.Cookie{
+		Name:     "__Host-sid",
+		Path:     "/",
+		MaxAge:   -1,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+)
+
+func (mgmt *SessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
 	var uid string
+	var ok bool
 	var err1 error
 	var err2 error
-	uid, err1 = mgmt.readTok(r)
-	if err1 != nil {
-		uid, err2 = mgmt.readSid(r, w)
+	uid, ok, err1 = mgmt.readTok(r, w)
+	if !ok {
+		uid, ok, err2 = mgmt.readSid(r, w)
 	}
-	return uid, errors.Join(err1, err2)
+	return uid, ok, errors.Join(err1, err2)
 }
 
 func (mgmt *SessionManager) setTokCookie(uid string, w http.ResponseWriter) {
@@ -66,7 +88,7 @@ func (mgmt *SessionManager) setTokCookie(uid string, w http.ResponseWriter) {
 	http.SetCookie(w, cookie)
 }
 
-func (mgmt *SessionManager) setSidCookie(sid string, w http.ResponseWriter) {
+func (mgmt *SessionManager) setSIDCookie(sid string, w http.ResponseWriter) {
 	hash := hmac.New(sha256.New, []byte(mgmt.keys[0]))
 	hash.Write([]byte(sid))
 	mac := hash.Sum(nil)
@@ -82,15 +104,16 @@ func (mgmt *SessionManager) setSidCookie(sid string, w http.ResponseWriter) {
 	http.SetCookie(w, cookie)
 }
 
-func (mgmt *SessionManager) readTok(r *http.Request) (string, error) {
-	cookie, err := r.Cookie("tok")
+func (mgmt *SessionManager) readTok(r *http.Request, w http.ResponseWriter) (string, bool, error) {
+	cookie, err := r.Cookie("__Host-tok")
 	if err != nil {
-		return "", ErrNoActiveToken
+		return "", false, nil
 	}
 	tok := cookie.Value
 	mac, tok, found := strings.Cut(tok, ".")
 	if !found {
-		return "", ErrTokCookieTamper
+		http.SetCookie(w, dropTokCookie)
+		return "", false, ErrTokCookieTamper
 	}
 	var targetMAC []byte
 	var match bool
@@ -104,30 +127,35 @@ func (mgmt *SessionManager) readTok(r *http.Request) (string, error) {
 		}
 	}
 	if !match {
-		return "", ErrTokCookieTamper
+		http.SetCookie(w, dropTokCookie)
+		return "", false, ErrTokCookieSignature
 	}
 	uid, expiresAtStr, found := strings.Cut(tok, ".")
 	if !found {
-		return "", ErrLeakedSecret
+		http.SetCookie(w, dropTokCookie)
+		return "", false, ErrLeakedSecret
 	}
 	expiresAt, err := strconv.ParseInt(expiresAtStr, 10, 64)
 	if err != nil {
-		return "", ErrLeakedSecret
+		http.SetCookie(w, dropTokCookie)
+		return "", false, ErrLeakedSecret
 	}
 	if time.Now().Unix() > expiresAt {
-		return "", ErrNoActiveToken
+		http.SetCookie(w, dropTokCookie)
+		return "", false, nil
 	}
-	return uid, nil
+	return uid, true, nil
 }
 
-func (mgmt *SessionManager) readSid(r *http.Request, w http.ResponseWriter) (string, error) {
-	cookie, err := r.Cookie("sid")
+func (mgmt *SessionManager) readSid(r *http.Request, w http.ResponseWriter) (string, bool, error) {
+	cookie, err := r.Cookie("__Host-sid")
 	if err != nil {
-		return "", ErrNoActiveSession
+		return "", false, nil
 	}
 	mac, id, found := strings.Cut(cookie.Value, ".")
 	if !found {
-		return "", ErrSidCookieTamper
+		http.SetCookie(w, dropSidCookie)
+		return "", false, ErrSIDCookieTamper
 	}
 	var targetMAC []byte
 	var match bool
@@ -141,7 +169,8 @@ func (mgmt *SessionManager) readSid(r *http.Request, w http.ResponseWriter) (str
 		}
 	}
 	if !match {
-		return "", ErrSidCookieTamper
+		http.SetCookie(w, dropSidCookie)
+		return "", false, ErrSIDCookieSignature
 	}
 	sess := Session{}
 	sess.id = id
@@ -153,92 +182,89 @@ func (mgmt *SessionManager) readSid(r *http.Request, w http.ResponseWriter) (str
 		obsolete
 	FROM
 		session WHERE id = ?`, id).Scan(
-		&sess.userId,
-		&sess.groupId,
+		&sess.userID,
+		&sess.groupID,
 		&sess.expiresAt,
 		&sess.obsolete,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", ErrNoActiveSession
+			http.SetCookie(w, dropSidCookie)
+			return "", false, nil
 		}
-		return "", errors.Join(ErrInternalService, err)
+		http.SetCookie(w, dropSidCookie)
+		return "", false, errors.Join(ErrInternalService, err)
 	}
 	if sess.obsolete {
-		_, err := mgmt.db.Exec("DELETE FROM session WHERE group_id = ?", sess.groupId)
+		_, err := mgmt.db.Exec("DELETE FROM session WHERE user_id = ?", sess.userID)
 		if err != nil {
-			return "", errors.Join(ErrCredentialReuse, ErrInternalService, err)
+			http.SetCookie(w, dropSidCookie)
+			return "", false, errors.Join(ErrCredentialReuse, ErrInternalService, err)
 		}
-		return "", ErrCredentialReuse
+		http.SetCookie(w, dropSidCookie)
+		return "", false, ErrCredentialReuse
 	}
 	if time.Now().Unix() > sess.expiresAt {
-		_, err := mgmt.db.Exec("DELETE FROM session WHERE group_id = ?", sess.groupId)
+		_, err := mgmt.db.Exec("DELETE FROM session WHERE group_id = ?", sess.groupID)
 		if err != nil {
-			return "", errors.Join(ErrNoActiveSession, ErrInternalService, err)
+			http.SetCookie(w, dropSidCookie)
+			return "", false, errors.Join(ErrInternalService, err)
 		}
-		return "", ErrNoActiveSession
+		http.SetCookie(w, dropSidCookie)
+		return "", false, nil
+	}
+	_, err = mgmt.db.Exec("UPDATE session SET obsolete = true WHERE id = ?", sess.id)
+	if err != nil {
+		http.SetCookie(w, dropSidCookie)
+		return "", false, errors.Join(ErrInternalService, err)
 	}
 	newId := make([]byte, 16)
 	_, err = rand.Read(newId)
 	if err != nil {
-		return "", errors.Join(ErrInternalService, err)
+		http.SetCookie(w, dropSidCookie)
+		return "", false, errors.Join(ErrInternalService, err)
 	}
-	sess.obsolete = true
 	newSess := Session{
 		hex.EncodeToString(newId),
-		sess.userId,
-		sess.groupId,
+		sess.userID,
+		sess.groupID,
 		sess.expiresAt,
 		false,
 	}
-	ch1 := make(chan error)
-	go func() {
-		var err error
-		_, err = mgmt.db.Exec(`
-		INSERT INTO session (
-			id,
-			user_id
-			group_id,
-			expires_at,
-			obsolete
-		) VALUES (
-			?,?,?,?,?
-		)`,
-			newSess.id,
-			newSess.userId,
-			newSess.groupId,
-			newSess.expiresAt,
-			newSess.obsolete,
-		)
-		ch1 <- err
-	}()
-	ch2 := make(chan error)
-	go func() {
-		var err error
-		_, err = mgmt.db.Exec(`
-			UPDATE session
-			SET obsolete = true
-			WHERE id = ?
-		`, sess.id)
-		ch2 <- err
-	}()
-	err1 := <-ch1
-	err2 := <-ch2
-	if err1 != nil || err2 != nil {
-		return "", errors.Join(ErrInternalService, err1, err2)
+	_, err = mgmt.db.Exec(`
+	INSERT INTO session (
+		id,
+		user_id
+		group_id,
+		expires_at,
+		obsolete
+	) VALUES (
+		?,?,?,?,?
+	)`,
+		newSess.id,
+		newSess.userID,
+		newSess.groupID,
+		newSess.expiresAt,
+		newSess.obsolete,
+	)
+	if err != nil {
+		http.SetCookie(w, dropSidCookie)
+		return "", false, errors.Join(ErrInternalService, err)
 	}
-	mgmt.setTokCookie(newSess.userId, w)
-	mgmt.setSidCookie(newSess.id, w)
-	return newSess.userId, nil
+	mgmt.setTokCookie(newSess.userID, w)
+	mgmt.setSIDCookie(newSess.id, w)
+	return newSess.userID, true, nil
 }
 
 // API
-// * User(r *http.Request, w http.ResponseWriter) string
+// * UserID(r *http.Request, w http.ResponseWriter) (string, bool, error)
 //
-// * Enable(uid string)
-// create initial session
-// set both cookies
+// * Enable(uid string) (error)
+// create session
+// set cookies
 //
-// * Disable(all bool)
-// if all { delete group } else { obsolete individual }
+// If the db query fails, client cookies will still be removed.
+// It is recommended to alert the user-agent if they intended to logout of all devices.
+// * Disable(all bool) (error)
+// if all { delete by userID } else { delete by groupID }
 // remove cookies

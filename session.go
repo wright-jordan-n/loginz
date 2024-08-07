@@ -1,4 +1,4 @@
-package session
+package authz
 
 import (
 	"crypto/hmac"

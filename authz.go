@@ -29,8 +29,8 @@ type SessionManager struct {
 }
 
 var (
-	ErrDBService = errors.New("login-authz - database operation failed")
-	ErrCryptoService = errors.New("login-authz - crypto operation failed")
+	ErrDBService          = errors.New("login-authz - database operation failed")
+	ErrCryptoService      = errors.New("login-authz - crypto operation failed")
 	ErrSIDCookieSyntax    = errors.New("login-authz - sid cookie syntax - possible tampering")
 	ErrSIDCookieSignature = errors.New("login-authz - sid cookie signature - possible tampering")
 	ErrTokCookieSyntax    = errors.New("login-authz - tok cookie syntax - possible tampering")
@@ -58,28 +58,28 @@ var (
 	}
 )
 
-func (mgmt *SessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
+func (authz *SessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
 	var uid string
 	var ok bool
 	var err1 error
 	var err2 error
-	uid, ok, err1 = mgmt.readTok(r, w)
+	uid, ok, err1 = authz.readTok(r, w)
 	if !ok {
-		uid, ok, err2 = mgmt.readSID(r, w)
+		uid, ok, err2 = authz.readSID(r, w)
 	}
 	return uid, ok, errors.Join(err1, err2)
 }
 
-func (mgmt *SessionManager) setTokCookie(uid string, w http.ResponseWriter) {
-	tok := uid + "." + strconv.FormatInt(time.Now().Unix()+mgmt.tokenTimeout, 10)
-	hash := hmac.New(sha256.New, []byte(mgmt.keys[0]))
+func (authz *SessionManager) setTokCookie(uid string, w http.ResponseWriter) {
+	tok := uid + "." + strconv.FormatInt(time.Now().Unix()+authz.tokenTimeout, 10)
+	hash := hmac.New(sha256.New, []byte(authz.keys[0]))
 	hash.Write([]byte(tok))
 	mac := hash.Sum(nil)
 	cookie := &http.Cookie{
 		Name:     "__Host-tok",
 		Value:    string(mac) + "." + tok,
 		Path:     "/",
-		MaxAge:   int(mgmt.tokenTimeout),
+		MaxAge:   int(authz.tokenTimeout),
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -87,15 +87,15 @@ func (mgmt *SessionManager) setTokCookie(uid string, w http.ResponseWriter) {
 	http.SetCookie(w, cookie)
 }
 
-func (mgmt *SessionManager) setSIDCookie(sid string, w http.ResponseWriter) {
-	hash := hmac.New(sha256.New, []byte(mgmt.keys[0]))
+func (authz *SessionManager) setSIDCookie(sid string, w http.ResponseWriter) {
+	hash := hmac.New(sha256.New, []byte(authz.keys[0]))
 	hash.Write([]byte(sid))
 	mac := hash.Sum(nil)
 	cookie := &http.Cookie{
 		Name:     "__Host-sid",
 		Value:    string(mac) + "." + sid,
 		Path:     "/",
-		MaxAge:   int(mgmt.sessionTimeout),
+		MaxAge:   int(authz.sessionTimeout),
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -103,7 +103,7 @@ func (mgmt *SessionManager) setSIDCookie(sid string, w http.ResponseWriter) {
 	http.SetCookie(w, cookie)
 }
 
-func (mgmt *SessionManager) readTok(r *http.Request, w http.ResponseWriter) (string, bool, error) {
+func (authz *SessionManager) readTok(r *http.Request, w http.ResponseWriter) (string, bool, error) {
 	cookie, err := r.Cookie("__Host-tok")
 	if err != nil {
 		return "", false, nil
@@ -116,8 +116,8 @@ func (mgmt *SessionManager) readTok(r *http.Request, w http.ResponseWriter) (str
 	}
 	var targetMAC []byte
 	var match bool
-	for i := 0; i < len(mgmt.keys); i++ {
-		hash := hmac.New(sha256.New, []byte(mgmt.keys[i]))
+	for i := 0; i < len(authz.keys); i++ {
+		hash := hmac.New(sha256.New, []byte(authz.keys[i]))
 		hash.Write([]byte(tok))
 		targetMAC = hash.Sum(nil)
 		match = hmac.Equal([]byte(mac), targetMAC)
@@ -146,7 +146,7 @@ func (mgmt *SessionManager) readTok(r *http.Request, w http.ResponseWriter) (str
 	return uid, true, nil
 }
 
-func (mgmt *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
+func (authz *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (string, bool, error) {
 	cookie, err := r.Cookie("__Host-sid")
 	if err != nil {
 		return "", false, nil
@@ -158,8 +158,8 @@ func (mgmt *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (str
 	}
 	var targetMAC []byte
 	var match bool
-	for i := 0; i < len(mgmt.keys); i++ {
-		hash := hmac.New(sha256.New, []byte(mgmt.keys[i]))
+	for i := 0; i < len(authz.keys); i++ {
+		hash := hmac.New(sha256.New, []byte(authz.keys[i]))
 		hash.Write([]byte(id))
 		targetMAC = hash.Sum(nil)
 		match = hmac.Equal([]byte(mac), targetMAC)
@@ -173,7 +173,7 @@ func (mgmt *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (str
 	}
 	sess := Session{}
 	sess.id = id
-	err = mgmt.db.QueryRow(`
+	err = authz.db.QueryRow(`
 	SELECT
 		user_id,
 		group_id,
@@ -195,7 +195,7 @@ func (mgmt *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (str
 		return "", false, errors.Join(ErrDBService, err)
 	}
 	if sess.obsolete {
-		_, err := mgmt.db.Exec("DELETE FROM session WHERE user_id = ?", sess.userID)
+		_, err := authz.db.Exec("DELETE FROM session WHERE user_id = ?", sess.userID)
 		if err != nil {
 			http.SetCookie(w, dropSIDCookie)
 			return "", false, errors.Join(ErrCredentialReuse, ErrDBService, err)
@@ -204,7 +204,7 @@ func (mgmt *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (str
 		return "", false, ErrCredentialReuse
 	}
 	if time.Now().Unix() > sess.expiresAt {
-		_, err := mgmt.db.Exec("DELETE FROM session WHERE group_id = ?", sess.groupID)
+		_, err := authz.db.Exec("DELETE FROM session WHERE group_id = ?", sess.groupID)
 		if err != nil {
 			http.SetCookie(w, dropSIDCookie)
 			return "", false, errors.Join(ErrDBService, err)
@@ -212,7 +212,7 @@ func (mgmt *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (str
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, nil
 	}
-	_, err = mgmt.db.Exec("UPDATE session SET obsolete = true WHERE id = ?", sess.id)
+	_, err = authz.db.Exec("UPDATE session SET obsolete = true WHERE id = ?", sess.id)
 	if err != nil {
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, errors.Join(ErrDBService, err)
@@ -230,7 +230,7 @@ func (mgmt *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (str
 		sess.expiresAt,
 		false,
 	}
-	_, err = mgmt.db.Exec(`
+	_, err = authz.db.Exec(`
 	INSERT INTO session (
 		id,
 		user_id
@@ -250,8 +250,8 @@ func (mgmt *SessionManager) readSID(r *http.Request, w http.ResponseWriter) (str
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, errors.Join(ErrDBService, err)
 	}
-	mgmt.setTokCookie(newSess.userID, w)
-	mgmt.setSIDCookie(newSess.id, w)
+	authz.setTokCookie(newSess.userID, w)
+	authz.setSIDCookie(newSess.id, w)
 	return newSess.userID, true, nil
 }
 

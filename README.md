@@ -1,3 +1,5 @@
+__Do not use this library. It's still in development and has not been thoroughly tested.__
+
 # loginz
 loginz is a "defaults-only" login authorization library.
 

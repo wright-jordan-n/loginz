@@ -77,7 +77,7 @@ func (authz *sessionManager) Enable(uid string, w http.ResponseWriter) error {
 		return errors.Join(ErrCryptoService, err)
 	}
 	groupID := make([]byte, 16)
-	_, err = rand.Read(sessID)
+	_, err = rand.Read(groupID)
 	if err != nil {
 		return errors.Join(ErrCryptoService, err)
 	}
@@ -93,13 +93,13 @@ func (authz *sessionManager) Enable(uid string, w http.ResponseWriter) error {
 	_, err = authz.db.Exec(`
 	INSERT INTO session (
 		id,
-		user_id
+		user_id,
 		group_id,
 		expires_at,
 		idle_deadline,
 		obsolete
 	) VALUES (
-		?,?,?,?,?
+		?,?,?,?,?,?
 	)`,
 		sess.id,
 		sess.userID,
@@ -135,7 +135,7 @@ func (authz *sessionManager) Disable(all bool, r *http.Request, w http.ResponseW
 		return false, nil
 	}
 	mac, id, found := strings.Cut(cookie.Value, ".")
-	if !found {
+	if !found || len(id) != 32 || len(mac) != 64 {
 		http.SetCookie(w, dropTokCookie)
 		http.SetCookie(w, dropSIDCookie)
 		return false, ErrSIDCookieSyntax
@@ -235,7 +235,7 @@ func (authz *sessionManager) setTokCookie(uid string, w http.ResponseWriter) {
 	mac := hash.Sum(nil)
 	cookie := &http.Cookie{
 		Name:     "__Host-tok",
-		Value:    string(mac) + "." + tok,
+		Value:    hex.EncodeToString(mac) + "." + tok,
 		Path:     "/",
 		MaxAge:   int(authz.tokenTimeout),
 		Secure:   true,
@@ -251,7 +251,7 @@ func (authz *sessionManager) setSIDCookie(sid string, w http.ResponseWriter) {
 	mac := hash.Sum(nil)
 	cookie := &http.Cookie{
 		Name:     "__Host-sid",
-		Value:    string(mac) + "." + sid,
+		Value:    hex.EncodeToString(mac) + "." + sid,
 		Path:     "/",
 		MaxAge:   int(authz.sessionTimeout),
 		Secure:   true,
@@ -268,7 +268,7 @@ func (authz *sessionManager) readTok(r *http.Request, w http.ResponseWriter) (st
 	}
 	tok := cookie.Value
 	mac, tok, found := strings.Cut(tok, ".")
-	if !found {
+	if !found || len(mac) < 64 || len(tok) < 32 {
 		http.SetCookie(w, dropTokCookie)
 		return "", false, ErrTokCookieSyntax
 	}
@@ -278,7 +278,14 @@ func (authz *sessionManager) readTok(r *http.Request, w http.ResponseWriter) (st
 		hash := hmac.New(sha256.New, []byte(authz.keys[i]))
 		hash.Write([]byte(tok))
 		targetMAC = hash.Sum(nil)
-		match = hmac.Equal([]byte(mac), targetMAC)
+		buf := []byte(mac)
+		actual := make([]byte, hex.DecodedLen(len(buf)))
+		_, err := hex.Decode(actual, buf)
+		if err != nil {
+			http.SetCookie(w, dropTokCookie)
+			return "", false, ErrTokCookieSyntax
+		}
+		match = hmac.Equal(actual, targetMAC)
 		if match {
 			break
 		}
@@ -288,7 +295,7 @@ func (authz *sessionManager) readTok(r *http.Request, w http.ResponseWriter) (st
 		return "", false, ErrTokCookieSignature
 	}
 	uid, expiresAtStr, found := strings.Cut(tok, ".")
-	if !found {
+	if !found || len(uid) != 32 {
 		http.SetCookie(w, dropTokCookie)
 		return "", false, ErrLeakedSecret
 	}
@@ -310,7 +317,7 @@ func (authz *sessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		return "", false, nil
 	}
 	mac, id, found := strings.Cut(cookie.Value, ".")
-	if !found {
+	if !found || len(mac) != 64 || len(id) != 32 {
 		http.SetCookie(w, dropSIDCookie)
 		return "", false, ErrSIDCookieSyntax
 	}
@@ -320,7 +327,14 @@ func (authz *sessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		hash := hmac.New(sha256.New, []byte(authz.keys[i]))
 		hash.Write([]byte(id))
 		targetMAC = hash.Sum(nil)
-		match = hmac.Equal([]byte(mac), targetMAC)
+		buf := []byte(mac)
+		actual := make([]byte, hex.DecodedLen(len(buf)))
+		_, err := hex.Decode(actual, buf)
+		if err != nil {
+			http.SetCookie(w, dropTokCookie)
+			return "", false, ErrTokCookieSyntax
+		}
+		match = hmac.Equal(actual, targetMAC)
 		if match {
 			break
 		}
@@ -394,13 +408,13 @@ func (authz *sessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 	_, err = authz.db.Exec(`
 	INSERT INTO session (
 		id,
-		user_id
+		user_id,
 		group_id,
 		expires_at,
 		idle_deadline,
 		obsolete
 	) VALUES (
-		?,?,?,?,?
+		?,?,?,?,?,?
 	)`,
 		newSess.id,
 		newSess.userID,

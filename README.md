@@ -1,4 +1,5 @@
-**Do not use this library for anything important. It has not been thoroughly tested.**
+**Do not use this library for anything important. It has not been thoroughly
+tested.**
 
 # loginz
 
@@ -16,7 +17,7 @@ authz := loginz.NewAuthZManager([]string{"key1", "key2"}, db, 60*60*24*365, 60*6
 
 http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 	// Authentication is not part of this library.
-	// It's expected that userID has a len of 32.
+	// It's expected that the userID has a len of 32.
 	// You should hex-encode 16 cryptographically random bytes.
 	userID := authenticate()
 	err := authz.Enable(userID, w)
@@ -28,11 +29,13 @@ http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 
 http.HandleFunc("/user", func(w http.ResponesWriter, r *http.Request) {
 	userID, authorized, err := authz.UserID(r, w)
-        if err != nil {
-	        // Log errs.
+    if err != nil {
+		// The userID may still be present.
+	    // Log errs.
 	}
 	if !authorized {
 		// User is not currently authorized.
+		return
 	}
 	fmt.Println(userID)
 })
@@ -41,12 +44,12 @@ http.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
 	authorized, err := authz.Disable(true, r, w)
 	if !authorized {
 		// User is not currently authorized.
-		// Cookies will be removed, but it's not guaranteed that db has been modified.
-		// If the user wished to logout of all sessions (i.e. if the first arg is true), then they should be notified of failure to do so.
+		// If the user wished to logout on all devices (i.e. if the first arg is true), then you should notify them of failure to do so.
 		if err != nil {
-			// Failure to verify authorization was caused by an unexpected situation, rather than simply an absent or expired session.
+			// Failure to verify authorization was caused by an unexpected situation.
 			// Log errs.
 		}
+		return
 	}
 })
 ```

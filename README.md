@@ -10,9 +10,9 @@ loginz is a login authorization library.
 ```
 // %arg1 - signing keys (newest to oldest)
 // %arg2 - An *sql.DB for SQLite3
-// %arg3 - session timeout
-// %arg4 - idle timeout
-// %arg5 - token timeout
+// %arg3 - session timeout in seconds
+// %arg4 - idle timeout in seconds
+// %arg5 - token timeout in seconds
 authz := loginz.NewAuthZManager([]string{"key1", "key2"}, db, 60*60*24*365, 60*60*24*14, 60*60)
 
 http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {

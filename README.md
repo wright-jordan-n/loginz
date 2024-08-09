@@ -5,23 +5,7 @@ has not been thoroughly tested.**
 
 loginz is a login authorization library.
 
-## Overview
-
-After a user is authenticated,
-`func (authz *sessionManager) Enable(uid string, w http.ResponseWriter) error`
-is called to initiate a new session. An access token is stored in the `tok`
-cookie, and a session id is stored in the `sid` cookie.
-
-For subsequent requests that require login authorization,
-`func (authz *sessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error)`
-is used to obtain the user identifier.
-
-In order to revoke authorization (aka logout),
-`func (authz *sessionManager) Disable(all bool, r *http.Request, w http.ResponseWriter) (bool, error)`
-is called. Where the `all` argument indicates whether to logout all user
-sessions or only the current session only.
-
-## Usage
+## Example
 
 ```
 // %arg1 - signing keys (newest to oldest)
@@ -33,9 +17,9 @@ authz := loginz.NewAuthZManager([]string{"key1", "key2"}, db, 60*60*24*365, 60*6
 
 http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 	// Authentication is not part of this library.
-	// It's expected that userID has len of 32.
-	// You should hex-encode 16 cryptograpically random bytes.
-	userID := autheticate()
+	// It's expected that userID has a len of 32.
+	// You should hex-encode 16 cryptographically random bytes.
+	userID := authenticate()
 	err := authz.Enable(userID, w)
 	if err != nil {
 		// Login failed.
@@ -60,7 +44,7 @@ http.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
 	if !authorized {
 		// User is not currently authorized.
 		// Cookies will be removed, but it's not guaranteed that db has been modified.
-		// If user wished to logout of all sessions (i.e. if first arg is true), then they should be notified of failure to do so.
+		// If the user wished to logout of all sessions (i.e. if the first arg is true), then they should be notified of failure to do so.
 		if err != nil {
 			// Failure to verify authorization was caused by an unexpected situation, rather than simply an absent or expired session.
 			// Log errs.
@@ -68,3 +52,19 @@ http.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
 	}
 })
 ```
+
+## Summary
+
+After a user is authenticated,
+`func (authz *sessionManager) Enable(uid string, w http.ResponseWriter) error`
+is called to initiate a new session. An access token is stored in the `tok`
+cookie and a session ID is stored in the `sid` cookie.
+
+For subsequent requests that require login authorization,
+`func (authz *sessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error)`
+is used to obtain the user identifier.
+
+To revoke authorization (aka logout),
+`func (authz *sessionManager) Disable(all bool, r *http.Request, w http.ResponseWriter) (bool, error)`
+is called. Where the `all` argument indicates whether to logout all user
+sessions or only the current session.

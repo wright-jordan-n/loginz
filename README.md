@@ -28,7 +28,7 @@ http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 
 http.HandleFunc("/user", func(w http.ResponesWriter, r *http.Request) {
 	userID, authorized, err := authz.UserID(r, w)
-    if err != nil {
+        if err != nil {
 			  // Log errs.
 	}
 	if !authorized {

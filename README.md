@@ -31,7 +31,7 @@ http.HandleFunc("/user", func(w http.ResponesWriter, r *http.Request) {
 	if !authorized {
 		// User is not currently authorized.
 		if err != nil {
-			// Failure to verify authorization was caused by an unexpected situation, rather than simply an absent or expired session.
+			// Failure to verify authorization was caused by an unexpected situation, rather than simply an absent or expired token/session.
 			// Log errs.
 		}
 	}

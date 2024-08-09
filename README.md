@@ -31,8 +31,7 @@ http.HandleFunc("/user", func(w http.ResponesWriter, r *http.Request) {
 	userID, authorized, err := authz.UserID(r, w)
 	if err != nil {
 		// The userID may still be present.
-		
-	    // Log errs.
+		// Log errs.
 	}
 	if !authorized {
 		// User is not currently authorized.

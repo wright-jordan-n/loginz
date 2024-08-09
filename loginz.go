@@ -146,7 +146,15 @@ func (authz *sessionManager) Disable(all bool, r *http.Request, w http.ResponseW
 		hash := hmac.New(sha256.New, []byte(authz.keys[i]))
 		hash.Write([]byte(id))
 		targetMAC = hash.Sum(nil)
-		match = hmac.Equal([]byte(mac), targetMAC)
+		buf := []byte(mac)
+		actual := make([]byte, hex.DecodedLen(len(buf)))
+		_, err := hex.Decode(actual, buf)
+		if err != nil {
+			http.SetCookie(w, dropTokCookie)
+			http.SetCookie(w, dropSIDCookie)
+			return false, ErrSIDCookieSyntax
+		}
+		match = hmac.Equal(actual, targetMAC)
 		if match {
 			break
 		}
@@ -331,8 +339,8 @@ func (authz *sessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 		actual := make([]byte, hex.DecodedLen(len(buf)))
 		_, err := hex.Decode(actual, buf)
 		if err != nil {
-			http.SetCookie(w, dropTokCookie)
-			return "", false, ErrTokCookieSyntax
+			http.SetCookie(w, dropSIDCookie)
+			return "", false, ErrSIDCookieSyntax
 		}
 		match = hmac.Equal(actual, targetMAC)
 		if match {
@@ -431,20 +439,3 @@ func (authz *sessionManager) readSID(r *http.Request, w http.ResponseWriter) (st
 	authz.setSIDCookie(newSess.id, w)
 	return newSess.userID, true, nil
 }
-
-// API
-// * UserID(r *http.Request, w http.ResponseWriter) (string, bool, error)
-//
-// * Enable(uid string) (error)
-// create session
-// set cookies
-//
-// If the db query fails, user-agent cookies will still be removed.
-// It is recommended to alert the user-agent if they intended to logout of all devices.
-// * ok, err := Disable(all bool) (bool, error)
-// ok and err should be treated as independent
-// if !ok, the the client is not authorized to perform this action
-// if !ok and all, then the client should be informed that they were not authorized to logout of all devices
-// if err, then the application should inspect the errors as necessary
-// if all { delete by userID } else { delete by groupID }
-// remove cookies

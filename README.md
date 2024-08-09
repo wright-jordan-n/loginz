@@ -1,80 +1,70 @@
-__Do not use this library. It's still in development and has not been thoroughly tested.__
+**Do not use this library for anything important. It's still in development and
+has not been thoroughly tested.**
 
 # loginz
-loginz is a "defaults-only" login authorization library.
+
+loginz is a login authorization library.
 
 ## Overview
 
-After a user is authenticated, `func (authz *SessionManager) Enable(uid string, w http.ResponseWriter) error` is called to initiate a new session. An access token is stored in the `tok` cookie, and a session id is stored in the `sid` cookie.
+After a user is authenticated,
+`func (authz *sessionManager) Enable(uid string, w http.ResponseWriter) error`
+is called to initiate a new session. An access token is stored in the `tok`
+cookie, and a session id is stored in the `sid` cookie.
 
-For subsequent requests that require login authorization, `func (authz *SessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error)` is used to obtain the user identifier.
+For subsequent requests that require login authorization,
+`func (authz *sessionManager) UserID(r *http.Request, w http.ResponseWriter) (string, bool, error)`
+is used to obtain the user identifier.
 
-In order to revoke authorization (aka logout), `func (authz *SessionManager) Disable(all bool, r *http.Request, w http.ResponseWriter) (bool, error)` is called. Where the `all` argument indicates whether to logout all user sessions or only the current session only.
+In order to revoke authorization (aka logout),
+`func (authz *sessionManager) Disable(all bool, r *http.Request, w http.ResponseWriter) (bool, error)`
+is called. Where the `all` argument indicates whether to logout all user
+sessions or only the current session only.
 
-## API
+## Usage
 
-### NewAuthZManager
 ```
-func NewAuthZManager(
-	keys []string,
-	db *sql.DB,
-	sessionTimeout int64,
-	idleTimeout int64,
-	tokenTimeout int64,
-) *sessionManager {
-	return &sessionManager{keys, db, sessionTimeout, idleTimeout, tokenTimeout}
-}
+// %arg1 - signing keys (newest to oldest)
+// %arg2 - An *sql.DB for SQLite3
+// %arg3 - session timeout
+// %arg4 - idle timeout
+// %arg5 - token timeout
+authz := loginz.NewAuthZManager([]string{"key1", "key2"}, db, 60*60*24*365, 60*60*24*14, 60*60)
+
+http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+	// Authentication is not part of this library.
+	// It's expected that userID has len of 32.
+	// You should hex-encode 16 cryptograpically random bytes.
+	userID := autheticate()
+	err := authz.Enable(userID, w)
+	if err != nil {
+		// Login failed.
+		// Log errs.
+	}
+})
+
+http.HandleFunc("/user", func(w http.ResponesWriter, r *http.Request) {
+	userID, authorized, err := authz.UserID(r, w)
+	if !authorized {
+		// User is not currently authorized.
+		if err != nil {
+			// Failure to verify authorization was caused by an unexpected situation, rather than simply an absent or expired session.
+			// Log errs.
+		}
+	}
+	fmt.Println(userID)
+})
+
+http.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
+	authorized, err := authz.Disable(true, r, w)
+	if !authorized {
+		// User is not currently authorized.
+		// Cookies will be removed, but it's not guaranteed that db has been modified.
+		// If user wished to logout of all sessions (i.e. if first arg is true), then they should be notified of failure to do so.
+		if err != nil {
+			// Failure to verify authorization was caused by an unexpected situation, rather than simply an absent or expired session.
+			// Log errs.
+		}
+	}
+})
 ```
-`keys` - Array of session keys. The newest key should be at the front of the array, and keys should get progressively older as the index increases.
-
-`db` - The standard libary's *sql.DB. Currently only SQLite3 should be used.
-
-`sessionTimeout` - The maximum amount of seconds that an authorization session remains valid, regardless of activity.
-
-`idleTimeout` - The amount of seconds the an authorization session will remain valid without a request for a new access token.
-
-`tokenTimeout`- The amount of seconds that an access token remains valid.
-
-### AuthZManager.Enable
-```
-func (authz *sessionManager) Enable(uid string, w http.ResponseWriter) error
-```
-Enables authorization for a provided user id.
-
-`uid` - A user id obtained as a result of the application's login authentication process.
-
-If the returning `err` is not `nil`, then the authorization request was not completed.
-
-### AuthZManager.UserID
-
-## Philosophy
-
-This library uses hybrid approach to session management. It combines the use of stateless access tokens with stateful session objects. The goal is to balance security and performance concerns.
-
-## Automatic Session ID Renewal
-
-This mechanism mirrors that of OAuth's Refresh Token Rotation. The session id may be thought of as a refresh token. Whenever a new access token is requested, the session id is used to generate it. The session object is then marked as obsolete, and is superseded by an associated session object with a new id. Session objects are associated by their initial authorization grant, so that if an obsolete session id used, then all session ids associated with the same grant are invalidated.
-
-It should be noted that this mechanism can result in a race condition between a legitimate user and an attacker. The first entity to obtain an access token before the session id's reuse is detected will be free to use the provided access token until it expires. Keep this in mind when deciding on timeout values.
-
-In the worst case scenario, if the legitimate user does not request any new access tokens, an attacker will be allowed to continually obtain new access tokens until the `idleTimeout` or `sessionTimeout` is enforced. 
-
-### Timeouts
-
-This library utilizes 3 different timeouts:
-
-* tokenTimeout
-
-The token timeout is the shortest of the 3 timeouts and controls the duration that an access token remains valid. This value has a correlated trade-off between performance and security. A lower timeout means less time that an attacker can potentially retain authorization in the event that session id reuse is detected. A higher timeout means less trips to the database to obtain new tokens.
-
-* idleTimeout
-
-The idle timeout indicates the amount of time that a session is allowed to remain valid without a request for a new access token.
-
-* sessionTimeout
-
-The session timeout is the longest timeout and is the maximum time that a session remains valid, regardless of activity.
-
-### Use At Your Own Risk
-
-Always verify and audit the implementation and use of third-party libraries such as this one.

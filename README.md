@@ -28,12 +28,11 @@ http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 
 http.HandleFunc("/user", func(w http.ResponesWriter, r *http.Request) {
 	userID, authorized, err := authz.UserID(r, w)
+ if err != nil {
+			// Log errs.
+	}
 	if !authorized {
 		// User is not currently authorized.
-		if err != nil {
-			// Failure to verify authorization was caused by an unexpected situation, rather than simply an absent or expired token/session.
-			// Log errs.
-		}
 	}
 	fmt.Println(userID)
 })

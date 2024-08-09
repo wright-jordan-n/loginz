@@ -1,5 +1,4 @@
-**Do not use this library for anything important. It's still in development and
-has not been thoroughly tested.**
+**Do not use this library for anything important. It has not been thoroughly tested.**
 
 # loginz
 

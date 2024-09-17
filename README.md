@@ -67,5 +67,5 @@ is used to obtain the user identifier.
 
 To revoke authorization (aka logout),
 `func (authz *sessionManager) Disable(all bool, r *http.Request, w http.ResponseWriter) (bool, error)`
-is called. Where the `all` argument indicates whether to logout all user
+is called. The `all` argument indicates whether to logout all user
 sessions or only the current session.

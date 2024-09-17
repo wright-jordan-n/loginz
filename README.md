@@ -8,7 +8,7 @@ loginz is a login authorization library.
 ## Example
 
 ```
-// func NewAuthZManager(keys []string, db *sql.DB, sessionTimeout int64, idleTimeout int64, tokenTimeout int64) *sessionManager
+// func (keys []string, db *sql.DB, sessionTimeout int64, idleTimeout int64, tokenTimeout int64) *sessionManager
 //
 // keys - signing keys (newest to oldest)
 // db - An *sql.DB for SQLite3

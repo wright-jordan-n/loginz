@@ -8,12 +8,13 @@ loginz is a login authorization library.
 ## Example
 
 ```
-// func NewAuthZManager(keys []string, db *sql.DB, sessionTimeout int, idleTimeout int, tokenTimeout int)
-// 	keys - signing keys (newest to oldest)
-// 	db - An *sql.DB for SQLite3
-// 	sessionTimeout - session timeout in seconds
-// 	idleTimeout - idle timeout in seconds
-// 	tokenTimeout - token timeout in seconds
+// func NewAuthZManager(keys []string, db *sql.DB, sessionTimeout int64, idleTimeout int64, tokenTimeout int64) *sessionManager
+//
+// keys - signing keys (newest to oldest)
+// db - An *sql.DB for SQLite3
+// sessionTimeout - absolute timeout in seconds
+// idleTimeout - how long a client is allowed to go without requesting a new token before they are no longer permitted to (in seconds)
+// tokenTimeout - token timeout in seconds
 authz := loginz.NewAuthZManager([]string{"key1", "key2"}, db, 60*60*24*365, 60*60*24*14, 60*60)
 
 http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {

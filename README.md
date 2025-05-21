@@ -8,7 +8,7 @@ loginz is a login authorization library.
 ## Example
 
 ```
-// func (keys []string, db *sql.DB, sessionTimeout int64, idleTimeout int64, tokenTimeout int64) *sessionManager
+// func NewAuthZManager(keys []string, db *sql.DB, sessionTimeout int64, idleTimeout int64, tokenTimeout int64) *sessionManager
 //
 // keys - signing keys (newest to oldest)
 // db - An *sql.DB for SQLite3
@@ -56,7 +56,9 @@ http.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
 
 ## Summary
 
-After a user is authenticated,
+Begin by initializing a new session manager object by calling `func NewAuthZManager(keys []string, db *sql.DB, sessionTimeout int64, idleTimeout int64, tokenTimeout int64) *sessionManager`.
+
+After a user is authenticated (outside the scope of this package),
 `func (authz *sessionManager) Enable(uid string, w http.ResponseWriter) error`
 is called to initiate a new session. An access token is stored in the `tok`
 cookie and a session ID is stored in the `sid` cookie.
